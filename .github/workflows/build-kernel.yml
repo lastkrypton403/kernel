@@ -31,44 +31,36 @@ jobs:
         uses: actions/checkout@v4
 
       # ─────────────────────────────────────────────────────────
-      # 2. Host build dependencies
+      # 2. Host build dependencies + Clang 18 via LLVM apt repo
+      #    Using apt.llvm.org — the official source, always up,
+      #    no wget-to-GitHub-release that can 404.
       # ─────────────────────────────────────────────────────────
-      - name: 🛠️ Install build deps
+      - name: 🛠️ Install build deps + Clang 18
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libssl-dev libelf-dev \
             git zip unzip wget curl python3 python-is-python3 \
             libncurses-dev lz4 zstd cpio rsync ca-certificates \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
 
-      # ─────────────────────────────────────────────────────────
-      # 3. Clang / LLVM toolchain
-      #    ZyCromerZ Clang 18 — self-contained, no extra GCC needed
-      # ─────────────────────────────────────────────────────────
-      - name: 🔧 Download Clang 18
-        run: |
-          mkdir -p "$HOME/tc/clang"
-          wget -q --show-progress \
-            "https://github.com/ZyCromerZ/Clang/releases/download/18.0.0git-20240601-release/Clang-18.0.0git-20240601.tar.gz" \
-            -O /tmp/clang.tar.gz
-          tar -xf /tmp/clang.tar.gz -C "$HOME/tc/clang"
-          echo "CLANG_BIN=$HOME/tc/clang/bin" >> $GITHUB_ENV
+          # Install Clang 18 from LLVM's official apt repo
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          sudo bash /tmp/llvm.sh 18
+          sudo apt-get install -y \
+            clang-18 lld-18 llvm-18 \
+            clang-tools-18 llvm-18-dev
 
-      # ─────────────────────────────────────────────────────────
-      # 4. AOSP GCC prebuilts (arm64 + arm32)
-      #    Required for some MTK inline-asm and assembler steps
-      # ─────────────────────────────────────────────────────────
-      - name: 🔧 Download AOSP GCC
-        run: |
-          git clone -q --depth=1 \
-            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
-            "$HOME/tc/gcc64"
-          git clone -q --depth=1 \
-            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
-            "$HOME/tc/gcc32"
-          echo "GCC64_BIN=$HOME/tc/gcc64/bin" >> $GITHUB_ENV
-          echo "GCC32_BIN=$HOME/tc/gcc32/bin" >> $GITHUB_ENV
+          # Create unversioned symlinks so the build system finds them
+          for tool in clang clang++ ld.lld llvm-ar llvm-nm \
+                      llvm-objcopy llvm-objdump llvm-readelf llvm-strip; do
+            sudo ln -sf /usr/bin/${tool}-18 /usr/local/bin/${tool}
+          done
+
+          echo "Toolchain ready:"
+          clang --version | head -1
+          aarch64-linux-gnu-gcc --version | head -1
 
       # ─────────────────────────────────────────────────────────
       # 5. Clone kernel source
@@ -89,7 +81,6 @@ jobs:
       # ─────────────────────────────────────────────────────────
       - name: 🛡️ Apply pentesting config
         run: |
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
           cd kernel
           mkdir -p out
 
@@ -102,7 +93,7 @@ jobs:
             "$GITHUB_WORKSPACE/pentesting.config"
 
           # Resolve any newly introduced symbols
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- \
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CC=clang olddefconfig
 
           echo "--- Active pentesting options ---"
@@ -114,7 +105,6 @@ jobs:
       # ─────────────────────────────────────────────────────────
       - name: 🔨 Build kernel
         run: |
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
           cd kernel
 
           BUILD_START=$(date +%s)
@@ -131,8 +121,8 @@ jobs:
             OBJDUMP=llvm-objdump \
             READELF=llvm-readelf \
             STRIP=llvm-strip \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabihf- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             Image.gz-dtb dtbo.img modules \
             2>&1 | tee build.log
@@ -152,11 +142,10 @@ jobs:
       # ─────────────────────────────────────────────────────────
       - name: 📦 Collect in-tree modules
         run: |
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
           mkdir -p /tmp/modules_staging
           make -C kernel O=out \
             ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             CC=clang \
             INSTALL_MOD_PATH=/tmp/modules_staging \
             INSTALL_MOD_STRIP=1 \
@@ -169,7 +158,6 @@ jobs:
       # ─────────────────────────────────────────────────────────
       - name: 📡 Build RTL8812AU Wi-Fi injection module
         run: |
-          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
           git clone -q --depth=1 \
             https://github.com/aircrack-ng/rtl8812au.git /tmp/rtl8812au
 
@@ -179,7 +167,7 @@ jobs:
           cd /tmp/rtl8812au
           make -j$(nproc --all) \
             ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
             CC=clang \
             KSRC="$GITHUB_WORKSPACE/kernel/out" \
             modules 2>&1 || echo "::warning::RTL8812AU build had errors — check output"
@@ -209,13 +197,13 @@ jobs:
 
           # In-tree modules
           find /tmp/modules_staging -name "*.ko" \
-            -exec "$CLANG_BIN/llvm-strip" --strip-debug {} \; \
+            -exec llvm-strip --strip-debug {} \; \
             -exec cp {} "$MODDIR/" \; 2>/dev/null || true
 
           # Out-of-tree RTL8812AU
           for ko in "$GITHUB_WORKSPACE"/extra-modules/*.ko; do
             [ -f "$ko" ] && \
-              "$CLANG_BIN/llvm-strip" --strip-debug "$ko" && \
+              llvm-strip --strip-debug "$ko" && \
               cp "$ko" "$MODDIR/"
           done
 
