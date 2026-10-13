@@ -1,0 +1,287 @@
+name: 🔨 Build Pentesting Kernel — rubyx
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: 'crDroid kernel branch (15.0 / 14.0 / 13.0)'
+        required: true
+        default: '15.0'
+      create_release:
+        description: 'Create a GitHub Release from this build'
+        type: boolean
+        default: false
+
+env:
+  TZ: UTC
+
+jobs:
+  build:
+    name: Pentest Kernel — rubyx
+    runs-on: ubuntu-22.04
+
+    steps:
+
+      # ─────────────────────────────────────────────────────────
+      # 1. Checkout this repo (holds our configs & anykernel.sh)
+      # ─────────────────────────────────────────────────────────
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────────────────────
+      # 2. Host build dependencies
+      # ─────────────────────────────────────────────────────────
+      - name: 🛠️ Install build deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            git zip unzip wget curl python3 python-is-python3 \
+            libncurses-dev lz4 zstd cpio rsync ca-certificates \
+            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabihf
+
+      # ─────────────────────────────────────────────────────────
+      # 3. Clang / LLVM toolchain
+      #    ZyCromerZ Clang 18 — self-contained, no extra GCC needed
+      # ─────────────────────────────────────────────────────────
+      - name: 🔧 Download Clang 18
+        run: |
+          mkdir -p "$HOME/tc/clang"
+          wget -q --show-progress \
+            "https://github.com/ZyCromerZ/Clang/releases/download/18.0.0git-20240601-release/Clang-18.0.0git-20240601.tar.gz" \
+            -O /tmp/clang.tar.gz
+          tar -xf /tmp/clang.tar.gz -C "$HOME/tc/clang"
+          echo "CLANG_BIN=$HOME/tc/clang/bin" >> $GITHUB_ENV
+
+      # ─────────────────────────────────────────────────────────
+      # 4. AOSP GCC prebuilts (arm64 + arm32)
+      #    Required for some MTK inline-asm and assembler steps
+      # ─────────────────────────────────────────────────────────
+      - name: 🔧 Download AOSP GCC
+        run: |
+          git clone -q --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 \
+            "$HOME/tc/gcc64"
+          git clone -q --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 \
+            "$HOME/tc/gcc32"
+          echo "GCC64_BIN=$HOME/tc/gcc64/bin" >> $GITHUB_ENV
+          echo "GCC32_BIN=$HOME/tc/gcc32/bin" >> $GITHUB_ENV
+
+      # ─────────────────────────────────────────────────────────
+      # 5. Clone kernel source
+      # ─────────────────────────────────────────────────────────
+      - name: 📥 Clone kernel source
+        run: |
+          BRANCH="${{ github.event.inputs.kernel_branch || '15.0' }}"
+          echo "KERNEL_BRANCH=${BRANCH}" >> $GITHUB_ENV
+          git clone -q --depth=1 \
+            --branch "${BRANCH}" \
+            https://github.com/crdroidandroid/android_kernel_xiaomi_mt6877.git \
+            kernel
+          echo "Cloned branch: ${BRANCH}"
+          make -C kernel kernelversion
+
+      # ─────────────────────────────────────────────────────────
+      # 6. Apply base defconfig + pentesting config fragment
+      # ─────────────────────────────────────────────────────────
+      - name: 🛡️ Apply pentesting config
+        run: |
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          cd kernel
+          mkdir -p out
+
+          # Base device defconfig
+          make O=out ARCH=arm64 rubyx_defconfig
+
+          # Merge our pentesting fragment on top
+          ./scripts/kconfig/merge_config.sh -m -O out \
+            out/.config \
+            "$GITHUB_WORKSPACE/pentesting.config"
+
+          # Resolve any newly introduced symbols
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-android- \
+            CC=clang olddefconfig
+
+          echo "--- Active pentesting options ---"
+          grep -E "CONFIG_(MODULES|NETFILTER|NF_TABLES|USB_CONFIGFS|USB_G_HID|CFG80211|MAC80211|RTL|ATH9K|MT7601|MT76|RT2800|WIREGUARD|TUN|PACKET|XFRM|PPP)" \
+            out/.config | sort
+
+      # ─────────────────────────────────────────────────────────
+      # 7. Build kernel image + modules
+      # ─────────────────────────────────────────────────────────
+      - name: 🔨 Build kernel
+        run: |
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          cd kernel
+
+          BUILD_START=$(date +%s)
+
+          make -j$(nproc --all) \
+            O=out \
+            ARCH=arm64 \
+            SUBARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            READELF=llvm-readelf \
+            STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            Image.gz-dtb dtbo.img modules \
+            2>&1 | tee build.log
+
+          BUILD_END=$(date +%s)
+          ELAPSED=$(( BUILD_END - BUILD_START ))
+          echo "Build time: $(( ELAPSED / 60 ))m $(( ELAPSED % 60 ))s"
+
+          # Fail the job if the kernel image wasn't produced
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "::error::Kernel image not found — build failed"
+            exit 1
+          fi
+
+      # ─────────────────────────────────────────────────────────
+      # 8. Install in-tree modules to staging dir
+      # ─────────────────────────────────────────────────────────
+      - name: 📦 Collect in-tree modules
+        run: |
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          mkdir -p /tmp/modules_staging
+          make -C kernel O=out \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CC=clang \
+            INSTALL_MOD_PATH=/tmp/modules_staging \
+            INSTALL_MOD_STRIP=1 \
+            modules_install
+          find /tmp/modules_staging -name "*.ko" | head -20
+
+      # ─────────────────────────────────────────────────────────
+      # 9. Build out-of-tree RTL8812AU driver
+      #    (Wi-Fi monitor mode + frame injection for external USB adapters)
+      # ─────────────────────────────────────────────────────────
+      - name: 📡 Build RTL8812AU Wi-Fi injection module
+        run: |
+          export PATH="$CLANG_BIN:$GCC64_BIN:$GCC32_BIN:$PATH"
+          git clone -q --depth=1 \
+            https://github.com/aircrack-ng/rtl8812au.git /tmp/rtl8812au
+
+          KVER=$(cat kernel/out/include/generated/utsrelease.h | sed 's/.*"\(.*\)".*/\1/')
+          echo "Kernel version: $KVER"
+
+          cd /tmp/rtl8812au
+          make -j$(nproc --all) \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-android- \
+            CC=clang \
+            KSRC="$GITHUB_WORKSPACE/kernel/out" \
+            modules 2>&1 || echo "::warning::RTL8812AU build had errors — check output"
+
+          mkdir -p "$GITHUB_WORKSPACE/extra-modules"
+          find . -name "*.ko" -exec cp {} "$GITHUB_WORKSPACE/extra-modules/" \;
+          ls "$GITHUB_WORKSPACE/extra-modules/"
+
+      # ─────────────────────────────────────────────────────────
+      # 10. Package: AnyKernel3 flashable ZIP
+      # ─────────────────────────────────────────────────────────
+      - name: 🗜️ Package AnyKernel3 zip
+        run: |
+          git clone -q --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git /tmp/AnyKernel3
+
+          # Our anykernel.sh (device config)
+          cp "$GITHUB_WORKSPACE/anykernel.sh" /tmp/AnyKernel3/anykernel.sh
+
+          # Kernel image
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb /tmp/AnyKernel3/
+          cp kernel/out/arch/arm64/boot/dtbo.img /tmp/AnyKernel3/ 2>/dev/null || true
+
+          # Modules — system/lib/modules (standard path for most Android 12+ devices)
+          MODDIR="/tmp/AnyKernel3/modules/system/lib/modules"
+          mkdir -p "$MODDIR"
+
+          # In-tree modules
+          find /tmp/modules_staging -name "*.ko" \
+            -exec "$CLANG_BIN/llvm-strip" --strip-debug {} \; \
+            -exec cp {} "$MODDIR/" \; 2>/dev/null || true
+
+          # Out-of-tree RTL8812AU
+          for ko in "$GITHUB_WORKSPACE"/extra-modules/*.ko; do
+            [ -f "$ko" ] && \
+              "$CLANG_BIN/llvm-strip" --strip-debug "$ko" && \
+              cp "$ko" "$MODDIR/"
+          done
+
+          echo "Modules included:"
+          ls "$MODDIR/" | sort
+
+          # Build zip
+          DATE=$(date -u +%Y%m%d-%H%M)
+          ZIPNAME="PentestKernel-rubyx-${DATE}-b${{ github.run_number }}.zip"
+          echo "ZIPNAME=${ZIPNAME}" >> $GITHUB_ENV
+
+          cd /tmp/AnyKernel3
+          zip -r9 "$GITHUB_WORKSPACE/${ZIPNAME}" . \
+            -x ".git/*" "*.md" "*.gitignore"
+
+          echo "Output: ${ZIPNAME} ($(du -sh "$GITHUB_WORKSPACE/${ZIPNAME}" | cut -f1))"
+
+      # ─────────────────────────────────────────────────────────
+      # 11. Upload artifact
+      # ─────────────────────────────────────────────────────────
+      - name: ☁️ Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PentestKernel-rubyx-b${{ github.run_number }}
+          path: |
+            ${{ env.ZIPNAME }}
+            kernel/build.log
+          retention-days: 30
+
+      # ─────────────────────────────────────────────────────────
+      # 12. Optional: create a GitHub Release
+      # ─────────────────────────────────────────────────────────
+      - name: 🚀 Create GitHub Release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pentest-b${{ github.run_number }}
+          name: "Pentest Kernel rubyx — Build #${{ github.run_number }}"
+          files: ${{ env.ZIPNAME }}
+          body: |
+            ## 🔐 Pentesting Kernel — Redmi Note 12 Pro+ 5G (rubyx)
+
+            **Source:** `crdroidandroid/android_kernel_xiaomi_mt6877` @ `${{ env.KERNEL_BRANCH }}`
+
+            ### Features
+            | Capability | Status |
+            |---|---|
+            | Full Netfilter / iptables / nftables | ✅ |
+            | USB Gadget HID — BadUSB keyboard emulation | ✅ |
+            | USB Gadget RNDIS / ECM / NCM (USB networking) | ✅ |
+            | Loadable kernel modules (`.ko`) | ✅ |
+            | Packet socket / raw capture (`tcpdump`, `hcxdumptool`) | ✅ |
+            | TUN/TAP — OpenVPN / WireGuard | ✅ |
+            | WireGuard (built-in) | ✅ |
+            | IPSec / IKEv2 (XFRM) | ✅ |
+            | cfg80211 / mac80211 (Wi-Fi stack) | ✅ |
+            | RTL8812AU — external USB Wi-Fi injection | ✅ |
+            | Atheros ath9k_htc (AR9271) | ✅ |
+            | MT7601U / MT7612U (mt76) | ✅ |
+            | RT2800USB (Ralink / Mediatek USB) | ✅ |
+            | Bluetooth RFCOMM / HID / BNEP | ✅ |
+
+            ### Flash instructions
+            1. Boot into TWRP
+            2. Flash the ZIP
+            3. Wipe cache / dalvik
+            4. Reboot
+
+            > ⚠️ For authorized security testing and educational use only.
