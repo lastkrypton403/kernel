@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       kernel_branch:
-        description: 'crDroid kernel branch (15.0 / 14.0 / 13.0)'
+        description: 'crDroid kernel branch (16.0 / 15.0 / 14.0 / 13.0)'
         required: true
-        default: '15.0'
+        default: '16.0'
       create_release:
         description: 'Create a GitHub Release from this build'
         type: boolean
@@ -67,7 +67,7 @@ jobs:
       # ─────────────────────────────────────────────────────────
       - name: 📥 Clone kernel source
         run: |
-          BRANCH="${{ github.event.inputs.kernel_branch || '15.0' }}"
+          BRANCH="${{ github.event.inputs.kernel_branch || '16.0' }}"
           echo "KERNEL_BRANCH=${BRANCH}" >> $GITHUB_ENV
           git clone -q --depth=1 \
             --branch "${BRANCH}" \
