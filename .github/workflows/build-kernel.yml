@@ -118,6 +118,8 @@ jobs:
 
           BUILD_START=$(date +%s)
 
+          # Note: dtbo.img is NOT a kernel make target on MT6877 branch 16.0 —
+          # it's produced by the ROM build system separately. Build Image.gz-dtb only.
           make -j$(nproc --all) \
             O=out \
             ARCH=arm64 \
@@ -133,7 +135,8 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabihf- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            Image.gz-dtb dtbo.img modules \
+            Image.gz-dtb modules \
+            < /dev/null \
             2>&1 | tee build.log
 
           BUILD_END=$(date +%s)
@@ -196,9 +199,8 @@ jobs:
           # Our anykernel.sh (device config)
           cp "$GITHUB_WORKSPACE/anykernel.sh" /tmp/AnyKernel3/anykernel.sh
 
-          # Kernel image
+          # Kernel image (dtbo.img is not produced by this kernel's make — skip it)
           cp kernel/out/arch/arm64/boot/Image.gz-dtb /tmp/AnyKernel3/
-          cp kernel/out/arch/arm64/boot/dtbo.img /tmp/AnyKernel3/ 2>/dev/null || true
 
           # Modules — system/lib/modules (standard path for most Android 12+ devices)
           MODDIR="/tmp/AnyKernel3/modules/system/lib/modules"
