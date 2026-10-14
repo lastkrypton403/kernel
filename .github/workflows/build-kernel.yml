@@ -77,6 +77,15 @@ jobs:
           make -C kernel kernelversion
 
       # ─────────────────────────────────────────────────────────
+      # 5b. List available defconfigs (so we can debug name issues)
+      # ─────────────────────────────────────────────────────────
+      - name: 🔍 List available defconfigs
+        run: |
+          echo "=== arch/arm64/configs/ ==="
+          ls kernel/arch/arm64/configs/ | grep -i "ruby\|defconfig" || \
+            ls kernel/arch/arm64/configs/
+
+      # ─────────────────────────────────────────────────────────
       # 6. Apply base defconfig + pentesting config fragment
       # ─────────────────────────────────────────────────────────
       - name: 🛡️ Apply pentesting config
@@ -84,8 +93,8 @@ jobs:
           cd kernel
           mkdir -p out
 
-          # Base device defconfig
-          make O=out ARCH=arm64 rubyx_defconfig
+          # Base device defconfig — all ruby variants share one defconfig
+          make O=out ARCH=arm64 ruby_defconfig
 
           # Merge our pentesting fragment on top
           ./scripts/kconfig/merge_config.sh -m -O out \
@@ -96,7 +105,7 @@ jobs:
           make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CC=clang olddefconfig
 
-          echo "--- Active pentesting options ---"
+          echo "--- Active pentesting options (sanity check) ---"
           grep -E "CONFIG_(MODULES|NETFILTER|NF_TABLES|USB_CONFIGFS|USB_G_HID|CFG80211|MAC80211|RTL|ATH9K|MT7601|MT76|RT2800|WIREGUARD|TUN|PACKET|XFRM|PPP)" \
             out/.config | sort
 
