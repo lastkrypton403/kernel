@@ -9,7 +9,7 @@
 
 properties() { '
 kernel.string=PentestKernel @ rubyx
-do.devicecheck=1
+do.devicecheck=0
 do.modules=1
 do.systemless=1
 do.cleanup=1
@@ -24,10 +24,10 @@ supported.patchlevels=
 '; }
 
 # ── Block device for boot partition ──────────────────────────
-block=/dev/block/platform/bootdevice/by-name/boot
+block=/dev/block/by-name/boot;
 
-# rubyx uses A/B-style OTA structure but has a single boot slot
-is_slot_device=0
+# rubyx is an A/B (VAB) device — flash to the active slot
+is_slot_device=1
 
 ramdisk_compression=auto
 patch_vbmeta_flag=auto
