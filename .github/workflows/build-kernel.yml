@@ -77,7 +77,50 @@ jobs:
           make -C kernel kernelversion
 
       # ─────────────────────────────────────────────────────────
-      # 5b. List available defconfigs (so we can debug name issues)
+      # 5a. Integrate KernelSU Next (non-GKI / legacy mode)
+      #     This patches fs/ with KSU hooks and adds drivers/kernelsu/
+      # ─────────────────────────────────────────────────────────
+      - name: 🔑 Integrate KernelSU Next
+        run: |
+          cd kernel
+          # Use KernelSU-Next's setup script — targets the 'next' branch
+          # which supports non-GKI (legacy) kernels like this 4.19 tree
+          curl -LSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s next
+          echo "KernelSU-Next files:"
+          ls KernelSU/
+
+      # ─────────────────────────────────────────────────────────
+      # 5b. Integrate SUSFS v2
+      #     Patches both the kernel fs/ and KernelSU driver
+      # ─────────────────────────────────────────────────────────
+      - name: 🛡️ Integrate SUSFS v2
+        run: |
+          cd kernel
+
+          # Clone the SUSFS patch set
+          git clone --depth=1 \
+            https://github.com/sidex15/susfs4ksu /tmp/susfs4ksu
+
+          echo "Available SUSFS patches:"
+          ls /tmp/susfs4ksu/kernel_patches/
+
+          # Apply kernel-side patch (4.19 specific, fall back to generic)
+          patch -p1 --forward \
+            < /tmp/susfs4ksu/kernel_patches/add_susfs_in_kernel-4.19.patch \
+            || patch -p1 --forward \
+               < /tmp/susfs4ksu/kernel_patches/add_susfs_in_kernel.patch
+
+          # Apply KSU-side SUSFS patch
+          cd KernelSU
+          patch -p1 --forward \
+            < /tmp/susfs4ksu/kernel_patches/add_susfs_in_ksu.patch
+
+          echo "SUSFS v2 integration done"
+
+      # ─────────────────────────────────────────────────────────
+      # 5c. List available defconfigs (so we can debug name issues)
       # ─────────────────────────────────────────────────────────
       - name: 🔍 List available defconfigs
         run: |
