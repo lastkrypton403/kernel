@@ -150,6 +150,22 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────────
+      # 7b. Surface the actual compiler errors on failure
+      # ─────────────────────────────────────────────────────────
+      - name: 🔍 Show build errors
+        if: failure()
+        run: |
+          echo "========================================"
+          echo "ERRORS / UNDEFINED REFERENCES"
+          echo "========================================"
+          grep -n "error:\|undefined reference\|No rule to make\|fatal error\|ld: error" \
+            kernel/build.log | tail -60 || true
+          echo "========================================"
+          echo "LAST 80 LINES OF BUILD LOG"
+          echo "========================================"
+          tail -80 kernel/build.log || true
+
+      # ─────────────────────────────────────────────────────────
       # 8. Install in-tree modules to staging dir
       # ─────────────────────────────────────────────────────────
       - name: 📦 Collect in-tree modules
@@ -236,6 +252,7 @@ jobs:
       # 11. Upload artifact
       # ─────────────────────────────────────────────────────────
       - name: ☁️ Upload artifact
+        if: always()   # run even on build failure so we always get build.log
         uses: actions/upload-artifact@v4
         with:
           name: PentestKernel-rubyx-b${{ github.run_number }}
