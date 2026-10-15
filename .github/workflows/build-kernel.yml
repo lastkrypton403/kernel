@@ -108,13 +108,19 @@ jobs:
           echo "=== kernel_patches/KernelSU/ ==="
           ls /tmp/susfs4ksu/kernel_patches/KernelSU/ || true
 
+          # Copy new SUSFS source files into the kernel tree BEFORE patching.
+          # The patch only modifies existing files; the new files (susfs.h, susfs.c, etc.)
+          # live in the include/ and fs/ subdirs of the patch repo and must be copied manually.
+          cp -rv /tmp/susfs4ksu/kernel_patches/include/* include/
+          cp -rv /tmp/susfs4ksu/kernel_patches/fs/*      fs/
+          echo "SUSFS source files copied"
+
           # Apply kernel-side patch for 4.19
           # --fuzz 3: tolerate slight context mismatches from MTK vendor changes
-          # || true: continue past the 2 known failed hunks (fs/open.c, fs/proc/task_mmu.c)
-          #          — those are minor SUSFS features, not critical to boot
+          # || true: continue past any remaining failed hunks (non-critical)
           patch -p1 --forward --fuzz 3 \
             < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-          echo "SUSFS kernel patch applied (some hunks may have been skipped)"
+          echo "SUSFS kernel patch applied"
 
           # Apply KSU-side SUSFS patch from the KernelSU subdir
           cd KernelSU-Next
