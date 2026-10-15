@@ -91,6 +91,15 @@ jobs:
           echo "KernelSU-Next files:"
           ls KernelSU-Next/
 
+          # copy_to_kernel_nofault was introduced in kernel 5.8.
+          # On 4.19 the equivalent is probe_kernel_write (same signature).
+          # Patch every KSU file that uses the newer name.
+          grep -rl "copy_to_kernel_nofault" drivers/kernelsu/ KernelSU-Next/ \
+            2>/dev/null | while read f; do
+            echo "Patching $f: copy_to_kernel_nofault -> probe_kernel_write"
+            sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' "$f"
+          done
+
       # ─────────────────────────────────────────────────────────
       # 5b. Integrate SUSFS v2
       #     Patches both the kernel fs/ and KernelSU driver
