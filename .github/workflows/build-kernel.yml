@@ -99,9 +99,9 @@ jobs:
         run: |
           cd kernel
 
-          # Clone the SUSFS patch set
+          # Clone the SUSFS patch set (original repo is on GitLab, not GitHub)
           git clone --depth=1 \
-            https://github.com/sidex15/susfs4ksu /tmp/susfs4ksu
+            https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
           echo "Available SUSFS patches:"
           ls /tmp/susfs4ksu/kernel_patches/
