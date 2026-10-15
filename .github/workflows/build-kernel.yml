@@ -101,6 +101,44 @@ jobs:
           done
 
       # ─────────────────────────────────────────────────────────
+      # 5a-2. Patch KernelSU Next for kernel 4.19 API compat
+      #   file_wrapper.c uses three 5.x-only APIs:
+      #   • iopoll         — added to file_operations in 5.1
+      #   • remap_file_range — different signature from 4.19's dedupe_file_range
+      #   • REMAP_FILE_DEDUP — flag added in 5.x
+      # ─────────────────────────────────────────────────────────
+      - name: 🔧 Patch KernelSU Next for kernel 4.19 API compat
+        run: |
+          cd kernel
+          F="drivers/kernelsu/infra/file_wrapper.c"
+          [ -f "$F" ] || { echo "file_wrapper.c not found, skipping"; exit 0; }
+
+          python3 - << 'PYEOF'
+with open("drivers/kernelsu/infra/file_wrapper.c") as f:
+    lines = f.readlines()
+
+out = []
+for line in lines:
+    # iopoll: not in 4.19 struct file_operations — drop lines that reference it
+    if "iopoll" in line:
+        print(f"  [drop iopoll]        {line.rstrip()}")
+        continue
+    # remap_file_range: completely different signature in 4.19 — drop references
+    if "remap_file_range" in line:
+        print(f"  [drop remap_range]   {line.rstrip()}")
+        continue
+    # REMAP_FILE_DEDUP: flag not in 4.19 — replace with 0 (makes branch dead code)
+    if "REMAP_FILE_DEDUP" in line:
+        line = line.replace("REMAP_FILE_DEDUP", "0")
+        print(f"  [zero DEDUP flag]    {line.rstrip()}")
+    out.append(line)
+
+with open("drivers/kernelsu/infra/file_wrapper.c", "w") as f:
+    f.writelines(out)
+print("file_wrapper.c patched for kernel 4.19 compat")
+PYEOF
+
+      # ─────────────────────────────────────────────────────────
       # 5b. Integrate SUSFS v2
       #     Patches both the kernel fs/ and KernelSU driver
       # ─────────────────────────────────────────────────────────
