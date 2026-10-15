@@ -122,12 +122,25 @@ jobs:
             -exec cp -v {} fs/ \;
           echo "SUSFS source files copied"
 
-          # Apply kernel-side patch for 4.19
-          # --fuzz 3: tolerate slight context mismatches from MTK vendor changes
-          # || true: continue past any remaining failed hunks (non-critical)
-          patch -p1 --forward --fuzz 3 \
+          # Apply kernel-side patch for 4.19.
+          # No --fuzz: fuzz caused hunk #1 to apply at the wrong location,
+          # inserting SUSFS declarations mid-function and corrupting the file.
+          # Let failing hunks fail cleanly; we fix them manually below.
+          patch -p1 --forward \
             < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch || true
-          echo "SUSFS kernel patch applied"
+          echo "SUSFS kernel patch applied (partial — fixing failed hunks manually)"
+
+          # Hunk #1 in task_mmu.c and open.c adds #include <linux/susfs.h>.
+          # If those files now reference SUSFS symbols but are missing the include,
+          # insert it manually after the last existing #include line.
+          for f in fs/proc/task_mmu.c fs/open.c; do
+            if grep -q "sus_" "$f" 2>/dev/null && \
+               ! grep -q "linux/susfs.h" "$f" 2>/dev/null; then
+              echo "Manually adding #include <linux/susfs.h> to $f"
+              LAST_INC=$(grep -n "^#include" "$f" | tail -1 | cut -d: -f1)
+              sed -i "${LAST_INC}a #include <linux/susfs.h>" "$f"
+            fi
+          done
 
           # Apply KSU-side SUSFS patch from the KernelSU subdir
           cd KernelSU-Next
