@@ -103,19 +103,22 @@ jobs:
           git clone --depth=1 \
             https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
-          echo "Available SUSFS patches:"
+          echo "=== kernel_patches/ ==="
           ls /tmp/susfs4ksu/kernel_patches/
+          echo "=== kernel_patches/KernelSU/ ==="
+          ls /tmp/susfs4ksu/kernel_patches/KernelSU/ || true
 
-          # Apply kernel-side patch (4.19 specific, fall back to generic)
+          # Apply kernel-side patch for 4.19
           patch -p1 --forward \
-            < /tmp/susfs4ksu/kernel_patches/add_susfs_in_kernel-4.19.patch \
-            || patch -p1 --forward \
-               < /tmp/susfs4ksu/kernel_patches/add_susfs_in_kernel.patch
+            < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.19.patch
 
-          # Apply KSU-side SUSFS patch
+          # Apply KSU-side SUSFS patch from the KernelSU subdir
           cd KernelSU-Next
-          patch -p1 --forward \
-            < /tmp/susfs4ksu/kernel_patches/add_susfs_in_ksu.patch
+          # Apply all patches in the KernelSU directory
+          for p in /tmp/susfs4ksu/kernel_patches/KernelSU/*.patch; do
+            echo "Applying: $p"
+            patch -p1 --forward < "$p" || true
+          done
 
           echo "SUSFS v2 integration done"
 
