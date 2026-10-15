@@ -108,11 +108,18 @@ jobs:
           echo "=== kernel_patches/KernelSU/ ==="
           ls /tmp/susfs4ksu/kernel_patches/KernelSU/ || true
 
-          # Copy new SUSFS source files into the kernel tree BEFORE patching.
-          # The patch only modifies existing files; the new files (susfs.h, susfs.c, etc.)
-          # live in the include/ and fs/ subdirs of the patch repo and must be copied manually.
+          # Copy new SUSFS files into the kernel tree BEFORE patching.
+          # include/ → safe to copy wholesale (all new headers)
+          # fs/      → copy ONLY susfs.c (the new implementation file).
+          #            DO NOT copy the whole fs/ dir — it contains pre-patched
+          #            versions of existing files (e.g. task_mmu.c) that will
+          #            overwrite and corrupt our vendor kernel tree.
+          echo "=== Files in kernel_patches/fs/ ==="
+          find /tmp/susfs4ksu/kernel_patches/fs/ -type f
+
           cp -rv /tmp/susfs4ksu/kernel_patches/include/* include/
-          cp -rv /tmp/susfs4ksu/kernel_patches/fs/*      fs/
+          find /tmp/susfs4ksu/kernel_patches/fs/ -name "susfs.c" \
+            -exec cp -v {} fs/ \;
           echo "SUSFS source files copied"
 
           # Apply kernel-side patch for 4.19
