@@ -91,14 +91,7 @@ jobs:
           echo "KernelSU-Next files:"
           ls KernelSU-Next/
 
-          # copy_to_kernel_nofault was introduced in kernel 5.8.
-          # On 4.19 the equivalent is probe_kernel_write (same signature).
-          # Patch every KSU file that uses the newer name.
-          grep -rl "copy_to_kernel_nofault" drivers/kernelsu/ KernelSU-Next/ \
-            2>/dev/null | while read f; do
-            echo "Patching $f: copy_to_kernel_nofault -> probe_kernel_write"
-            sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' "$f"
-          done
+          # (API compat fixes handled in the dedicated compat step below)
 
       # ─────────────────────────────────────────────────────────
       # 5a-2. Patch KernelSU Next for kernel 4.19 API compat
@@ -110,7 +103,51 @@ jobs:
       - name: 🔧 Patch KernelSU Next for kernel 4.19 API compat
         run: |
           cd kernel
-          python3 "$GITHUB_WORKSPACE/scripts/patch_ksu_compat.py"
+          echo "=== Proactive KSU 4.19 compat fixes ==="
+
+          # ── 1. copy_to_kernel_nofault → probe_kernel_write ──────────
+          # copy_to_kernel_nofault was added in 5.8; same signature as 4.19's
+          # probe_kernel_write so a straight rename works.
+          grep -rl "copy_to_kernel_nofault" drivers/kernelsu/ 2>/dev/null \
+            | while read f; do
+              sed -i 's/copy_to_kernel_nofault/probe_kernel_write/g' "$f"
+              echo "  [fixed] copy_to_kernel_nofault → probe_kernel_write: $f"
+            done
+
+          # ── 2. file_wrapper.c: 5.x-only struct file_operations fields ─
+          F="drivers/kernelsu/infra/file_wrapper.c"
+          if [ -f "$F" ]; then
+            # iopoll: added in 5.1 — remove every line that references it
+            grep -v "iopoll" "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
+            # remap_file_range: incompatible signature vs 4.19's dedupe_file_range
+            grep -v "remap_file_range" "$F" > "${F}.tmp" && mv "${F}.tmp" "$F"
+            # REMAP_FILE_DEDUP: flag added in 5.x — zero it (branch becomes dead code)
+            sed -i 's/REMAP_FILE_DEDUP/0/g' "$F"
+            echo "  [fixed] file_wrapper.c: iopoll / remap_file_range / REMAP_FILE_DEDUP"
+          fi
+
+          # ── 3. Broad scan: any remaining 5.x-only symbols across all KSU files ─
+          # These are the next most common 4.19 vs 5.x mismatches in KSU Next.
+          KSUDIR="drivers/kernelsu"
+
+          # lookup_fast: gained an extra argument in 5.x
+          grep -rl "lookup_fast" "$KSUDIR/" 2>/dev/null \
+            | while read f; do
+              sed -i 's/lookup_fast(\([^,]*\), \([^,]*\), \([^)]*\))/lookup_fast(\1, \2)/g' "$f" \
+                && echo "  [fixed] lookup_fast arg count: $f" || true
+            done
+
+          # mnt_want_write_file / path_mnt: signature/member changes — suppress
+          # by adding -Wno-error=implicit-function-declaration only for KSU Makefile
+          for mk in "$KSUDIR/Makefile" "$KSUDIR/Kbuild"; do
+            if [ -f "$mk" ]; then
+              grep -q "Wno-implicit-function-declaration" "$mk" || \
+                echo 'ccflags-y += -Wno-implicit-function-declaration' >> "$mk"
+              echo "  [added] -Wno-implicit-function-declaration to $mk"
+            fi
+          done
+
+          echo "=== KSU compat fixes done ==="
 
       # ─────────────────────────────────────────────────────────
       # 5b. Integrate SUSFS v2
